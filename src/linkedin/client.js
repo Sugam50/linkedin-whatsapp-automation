@@ -1,0 +1,259 @@
+import axios from 'axios';
+import FormData from 'form-data';
+import fs from 'fs';
+import path from 'path';
+
+class LinkedInClient {
+  constructor(clientId, clientSecret, redirectUri) {
+    if (!clientId || !clientSecret) {
+      throw new Error('LinkedIn Client ID and Secret are required');
+    }
+    this.clientId = clientId;
+    this.clientSecret = clientSecret;
+    this.redirectUri = redirectUri || 'http://localhost:3000/auth/linkedin/callback';
+    this.baseURL = 'https://api.linkedin.com/v2';
+    this.authURL = 'https://www.linkedin.com/oauth/v2';
+    this.accessToken = null;
+  }
+
+  /**
+   * Set access token (obtained from OAuth flow)
+   * @param {string} token - Access token
+   */
+  setAccessToken(token) {
+    this.accessToken = token;
+  }
+
+  /**
+   * Get OAuth authorization URL
+   * @param {string[]} scopes - OAuth scopes (default: w_member_social)
+   * @returns {string} Authorization URL
+   */
+  getAuthorizationUrl(scopes = ['w_member_social']) {
+    const scopeString = scopes.join(' ');
+    const state = Math.random().toString(36).substring(7); // Random state for security
+    
+    return `${this.authURL}/authorization?` +
+      `response_type=code&` +
+      `client_id=${this.clientId}&` +
+      `redirect_uri=${encodeURIComponent(this.redirectUri)}&` +
+      `state=${state}&` +
+      `scope=${encodeURIComponent(scopeString)}`;
+  }
+
+  /**
+   * Exchange authorization code for access token
+   * @param {string} code - Authorization code from OAuth callback
+   * @returns {Promise<string>} Access token
+   */
+  async getAccessToken(code) {
+    try {
+      const response = await axios.post(
+        `${this.authURL}/accessToken`,
+        new URLSearchParams({
+          grant_type: 'authorization_code',
+          code: code,
+          redirect_uri: this.redirectUri,
+          client_id: this.clientId,
+          client_secret: this.clientSecret
+        }),
+        {
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded'
+          }
+        }
+      );
+
+      this.accessToken = response.data.access_token;
+      return this.accessToken;
+    } catch (error) {
+      console.error('Error getting access token:', error.response?.data || error.message);
+      throw new Error(`Failed to get access token: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get current user's profile ID (URN)
+   * @returns {Promise<string>} User URN
+   */
+  async getCurrentUserProfile() {
+    if (!this.accessToken) {
+      throw new Error('Access token is required. Please authenticate first.');
+    }
+
+    try {
+      const response = await axios.get(
+        `${this.baseURL}/userinfo`,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.accessToken}`
+          }
+        }
+      );
+
+      // Get user profile ID
+      const profileResponse = await axios.get(
+        `${this.baseURL}/me`,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.accessToken}`
+          }
+        }
+      );
+
+      return profileResponse.data.id; // Returns user URN like "urn:li:person:xxxxx"
+    } catch (error) {
+      console.error('Error getting user profile:', error.response?.data || error.message);
+      throw new Error(`Failed to get user profile: ${error.message}`);
+    }
+  }
+
+  /**
+   * Upload image to LinkedIn
+   * @param {string} imagePath - Path to image file
+   * @returns {Promise<string>} Upload URL (upload URL for image)
+   */
+  async uploadImage(imagePath) {
+    if (!this.accessToken) {
+      throw new Error('Access token is required');
+    }
+
+    if (!fs.existsSync(imagePath)) {
+      throw new Error(`Image file not found: ${imagePath}`);
+    }
+
+    try {
+      // Step 1: Get user profile URN
+      const userUrn = await this.getCurrentUserProfile();
+      
+      // Step 2: Initialize image upload
+      const initializeResponse = await axios.post(
+        `${this.baseURL}/assets?action=registerUpload`,
+        {
+          registerUploadRequest: {
+            recipes: ['urn:li:digitalmediaRecipe:feedshare-image'],
+            owner: userUrn,
+            serviceRelationships: [{
+              relationshipType: 'OWNER',
+              identifier: 'urn:li:userGeneratedContent'
+            }]
+          }
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${this.accessToken}`,
+            'Content-Type': 'application/json'
+          }
+        }
+      );
+
+      const uploadUrl = initializeResponse.data.value.uploadMechanism['com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest'].uploadUrl;
+      const asset = initializeResponse.data.value.asset;
+
+      // Step 3: Upload image file
+      const imageData = fs.readFileSync(imagePath);
+      const formData = new FormData();
+      formData.append('file', imageData, {
+        filename: path.basename(imagePath),
+        contentType: 'image/jpeg' // Adjust based on image type
+      });
+
+      await axios.put(uploadUrl, imageData, {
+        headers: {
+          'Authorization': `Bearer ${this.accessToken}`,
+          'Content-Type': 'image/jpeg'
+        }
+      });
+
+      return asset; // Returns asset URN
+    } catch (error) {
+      console.error('Error uploading image:', error.response?.data || error.message);
+      throw new Error(`Failed to upload image: ${error.message}`);
+    }
+  }
+
+  /**
+   * Create a LinkedIn post with text and image
+   * @param {string} content - Post text content
+   * @param {string} imagePath - Optional path to image file
+   * @returns {Promise<object>} Post response with post ID
+   */
+  async createPost(content, imagePath = null) {
+    if (!this.accessToken) {
+      throw new Error('Access token is required. Please authenticate first.');
+    }
+
+    try {
+      const userUrn = await this.getCurrentUserProfile();
+
+      let postData = {
+        author: userUrn,
+        lifecycleState: 'PUBLISHED',
+        specificContent: {
+          'com.linkedin.ugc.ShareContent': {
+            shareCommentary: {
+              text: content
+            },
+            shareMediaCategory: imagePath ? 'IMAGE' : 'NONE'
+          }
+        },
+        visibility: {
+          'com.linkedin.ugc.MemberNetworkVisibility': 'PUBLIC'
+        }
+      };
+
+      // Add image if provided
+      if (imagePath) {
+        const imageAsset = await this.uploadImage(imagePath);
+        postData.specificContent['com.linkedin.ugc.ShareContent'].media = [
+          {
+            status: 'READY',
+            media: imageAsset,
+            title: {
+              text: 'LinkedIn Post Image'
+            }
+          }
+        ];
+      }
+
+      const response = await axios.post(
+        `${this.baseURL}/ugcPosts`,
+        postData,
+        {
+          headers: {
+            'Authorization': `Bearer ${this.accessToken}`,
+            'Content-Type': 'application/json',
+            'X-Restli-Protocol-Version': '2.0.0'
+          }
+        }
+      );
+
+      // Extract post ID from response headers
+      const postId = response.headers['x-linkedin-id'] || response.data.id;
+      
+      return {
+        success: true,
+        postId: postId,
+        message: 'Post created successfully'
+      };
+    } catch (error) {
+      console.error('Error creating LinkedIn post:', error.response?.data || error.message);
+      throw new Error(`Failed to create LinkedIn post: ${error.message}`);
+    }
+  }
+
+  /**
+   * Test connection by getting user profile
+   * @returns {Promise<boolean>} True if connection successful
+   */
+  async testConnection() {
+    try {
+      await this.getCurrentUserProfile();
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+}
+
+export default LinkedInClient;
