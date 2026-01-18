@@ -45,3 +45,13 @@ Thumbs.db
 # Build
 dist/
 build/
+
+#setup guide
+DEPLOYMENT_PLAN.md
+SETUP_NEXT_STEPS.md
+
+#data
+data/
+
+#images
+images/

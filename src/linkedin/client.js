@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 
 class LinkedInClient {
-  constructor(clientId, clientSecret, redirectUri) {
+  constructor(clientId, clientSecret, redirectUri, db = null) {
     if (!clientId || !clientSecret) {
       throw new Error('LinkedIn Client ID and Secret are required');
     }
@@ -14,6 +14,99 @@ class LinkedInClient {
     this.baseURL = 'https://api.linkedin.com/v2';
     this.authURL = 'https://www.linkedin.com/oauth/v2';
     this.accessToken = null;
+    this.db = db;
+    this.provider = 'linkedin';
+
+    // Load tokens from database if available
+    if (this.db) {
+      this.loadTokensFromDatabase();
+    }
+  }
+
+  /**
+   * Load tokens from database
+   */
+  loadTokensFromDatabase() {
+    if (!this.db) return;
+
+    const tokenData = this.db.getOAuthToken(this.provider);
+    if (tokenData) {
+      this.accessToken = tokenData.access_token;
+      this.refreshToken = tokenData.refresh_token;
+      console.log('✅ Loaded LinkedIn tokens from database');
+    }
+  }
+
+  /**
+   * Save tokens to database
+   * @param {object} tokenData - Token data from OAuth response
+   */
+  saveTokensToDatabase(tokenData) {
+    if (!this.db) return;
+
+    this.db.saveOAuthToken(this.provider, tokenData);
+    this.accessToken = tokenData.access_token;
+    this.refreshToken = tokenData.refresh_token;
+    console.log('✅ LinkedIn tokens saved to database');
+  }
+
+  /**
+   * Check if access token is expired or about to expire
+   * @returns {boolean} True if token needs refresh
+   */
+  isAccessTokenExpired() {
+    if (!this.db) return !this.accessToken;
+
+    return this.db.isTokenExpired(this.provider);
+  }
+
+  /**
+   * Refresh access token using refresh token
+   * @returns {Promise<string>} New access token
+   */
+  async refreshAccessToken() {
+    if (!this.refreshToken) {
+      throw new Error('No refresh token available. Please re-authorize the application.');
+    }
+
+    try {
+      console.log('🔄 Refreshing LinkedIn access token...');
+
+      const response = await axios.post(
+        `${this.authURL}/accessToken`,
+        new URLSearchParams({
+          grant_type: 'refresh_token',
+          refresh_token: this.refreshToken,
+          client_id: this.clientId,
+          client_secret: this.clientSecret
+        }),
+        {
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded'
+          }
+        }
+      );
+
+      const tokenData = response.data;
+      this.saveTokensToDatabase(tokenData);
+
+      console.log('✅ LinkedIn access token refreshed successfully');
+      return this.accessToken;
+    } catch (error) {
+      console.error('❌ Failed to refresh LinkedIn access token:', error.response?.data || error.message);
+      throw new Error(`Token refresh failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Ensure valid access token (refresh if needed)
+   * @returns {Promise<string>} Valid access token
+   */
+  async ensureValidToken() {
+    if (this.isAccessTokenExpired()) {
+      await this.refreshAccessToken();
+    }
+    return this.accessToken;
   }
 
   /**
@@ -29,16 +122,35 @@ class LinkedInClient {
    * @param {string[]} scopes - OAuth scopes (default: w_member_social)
    * @returns {string} Authorization URL
    */
-  getAuthorizationUrl(scopes = ['w_member_social']) {
-    const scopeString = scopes.join(' ');
-    const state = Math.random().toString(36).substring(7); // Random state for security
-    
-    return `${this.authURL}/authorization?` +
-      `response_type=code&` +
-      `client_id=${this.clientId}&` +
-      `redirect_uri=${encodeURIComponent(this.redirectUri)}&` +
-      `state=${state}&` +
-      `scope=${encodeURIComponent(scopeString)}`;
+  getAuthorizationUrl(scopes = ['openid', 'profile', 'w_member_social']) {
+    const state = Math.random().toString(36).substring(7);
+  
+    const url = new URL(`${this.authURL}/authorization`);
+  
+    url.searchParams.set('response_type', 'code');
+    url.searchParams.set('client_id', this.clientId);
+    url.searchParams.set('redirect_uri', this.redirectUri);
+    url.searchParams.set('state', state);
+    url.searchParams.set('scope', scopes.join(' '));
+  
+    return url.toString();
+  }
+  
+
+  /**
+   * Complete OAuth flow with authorization code
+   * @param {string} code - Authorization code from OAuth callback
+   * @returns {Promise<object>} Token information
+   */
+  async completeOAuthFlow(code) {
+    const tokenData = await this.getAccessToken(code);
+    return {
+      access_token: tokenData.access_token,
+      refresh_token: tokenData.refresh_token,
+      expires_in: tokenData.expires_in,
+      token_type: tokenData.token_type,
+      scope: tokenData.scope
+    };
   }
 
   /**
@@ -64,7 +176,10 @@ class LinkedInClient {
         }
       );
 
-      this.accessToken = response.data.access_token;
+      const tokenData = response.data;
+      console.log('🔄 Access token received:', tokenData);
+      this.saveTokensToDatabase(tokenData);
+
       return this.accessToken;
     } catch (error) {
       console.error('Error getting access token:', error.response?.data || error.message);
@@ -77,31 +192,21 @@ class LinkedInClient {
    * @returns {Promise<string>} User URN
    */
   async getCurrentUserProfile() {
-    if (!this.accessToken) {
-      throw new Error('Access token is required. Please authenticate first.');
-    }
+    const token = await this.ensureValidToken();
 
     try {
       const response = await axios.get(
         `${this.baseURL}/userinfo`,
         {
           headers: {
-            'Authorization': `Bearer ${this.accessToken}`
+            'Authorization': `Bearer ${token}`
           }
         }
       );
 
-      // Get user profile ID
-      const profileResponse = await axios.get(
-        `${this.baseURL}/me`,
-        {
-          headers: {
-            'Authorization': `Bearer ${this.accessToken}`
-          }
-        }
-      );
+      const memberId = response.data.sub;
 
-      return profileResponse.data.id; // Returns user URN like "urn:li:person:xxxxx"
+      return `urn:li:person:${memberId}`;
     } catch (error) {
       console.error('Error getting user profile:', error.response?.data || error.message);
       throw new Error(`Failed to get user profile: ${error.message}`);
@@ -114,9 +219,7 @@ class LinkedInClient {
    * @returns {Promise<string>} Upload URL (upload URL for image)
    */
   async uploadImage(imagePath) {
-    if (!this.accessToken) {
-      throw new Error('Access token is required');
-    }
+    const token = await this.ensureValidToken();
 
     if (!fs.existsSync(imagePath)) {
       throw new Error(`Image file not found: ${imagePath}`);
@@ -125,7 +228,7 @@ class LinkedInClient {
     try {
       // Step 1: Get user profile URN
       const userUrn = await this.getCurrentUserProfile();
-      
+
       // Step 2: Initialize image upload
       const initializeResponse = await axios.post(
         `${this.baseURL}/assets?action=registerUpload`,
@@ -141,7 +244,7 @@ class LinkedInClient {
         },
         {
           headers: {
-            'Authorization': `Bearer ${this.accessToken}`,
+            'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json'
           }
         }
@@ -152,15 +255,10 @@ class LinkedInClient {
 
       // Step 3: Upload image file
       const imageData = fs.readFileSync(imagePath);
-      const formData = new FormData();
-      formData.append('file', imageData, {
-        filename: path.basename(imagePath),
-        contentType: 'image/jpeg' // Adjust based on image type
-      });
 
       await axios.put(uploadUrl, imageData, {
         headers: {
-          'Authorization': `Bearer ${this.accessToken}`,
+          'Authorization': `Bearer ${token}`,
           'Content-Type': 'image/jpeg'
         }
       });
@@ -179,9 +277,7 @@ class LinkedInClient {
    * @returns {Promise<object>} Post response with post ID
    */
   async createPost(content, imagePath = null) {
-    if (!this.accessToken) {
-      throw new Error('Access token is required. Please authenticate first.');
-    }
+    const token = await this.ensureValidToken();
 
     try {
       const userUrn = await this.getCurrentUserProfile();
@@ -221,7 +317,7 @@ class LinkedInClient {
         postData,
         {
           headers: {
-            'Authorization': `Bearer ${this.accessToken}`,
+            'Authorization': `Bearer ${token}`,
             'Content-Type': 'application/json',
             'X-Restli-Protocol-Version': '2.0.0'
           }
@@ -248,6 +344,7 @@ class LinkedInClient {
    */
   async testConnection() {
     try {
+      await this.ensureValidToken();
       await this.getCurrentUserProfile();
       return true;
     } catch (error) {

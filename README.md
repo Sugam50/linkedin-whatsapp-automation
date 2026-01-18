@@ -1,12 +1,12 @@
-# LinkedIn WhatsApp Automation
+# LinkedIn Telegram Automation
 
-An automated system that generates LinkedIn posts with images using Google Gemini Pro API, sends them to WhatsApp for approval, and posts approved content to LinkedIn.
+An automated system that generates LinkedIn posts with images using Google generative models, sends them to a Telegram bot for review/approval, and posts approved content to LinkedIn.
 
 ## Features
 
 - 🤖 **AI-Powered Post Generation**: Uses Google Gemini Pro to generate professional LinkedIn posts
 - 🎨 **Image Generation**: Generates relevant images using Gemini/Nano Banana (or alternative services)
-- 💬 **WhatsApp Integration**: Send and receive approvals via WhatsApp
+- 💬 **Telegram Integration**: Send and receive approvals via Telegram
 - 🔗 **LinkedIn Posting**: Automatically post approved content to LinkedIn with images
 - 💾 **Database Storage**: SQLite database for managing posts and history
 - ✅ **Approval Workflow**: Review and approve posts before publishing
@@ -14,10 +14,10 @@ An automated system that generates LinkedIn posts with images using Google Gemin
 ## Prerequisites
 
 - Node.js 18+ installed
-- Google Gemini Pro subscription
+- Google generative API access (Gemini or supported model)
 - LinkedIn Developer account
-- WhatsApp account (mobile number)
-- API keys (see setup instructions below)
+- Telegram bot token
+- API keys / tokens (see setup instructions below)
 
 ## Quick Start
 
@@ -49,29 +49,57 @@ npm install
 npm start
 ```
 
-5. **Scan WhatsApp QR Code**: When prompted, scan the QR code with your WhatsApp mobile app:
-   - Open WhatsApp on your phone
-   - Go to Settings > Linked Devices
-   - Tap "Link a Device"
-   - Scan the QR code displayed in the terminal
+5. **Start the Telegram bot**
+   - Ensure `TELEGRAM_BOT_TOKEN` is set in your `.env`
+   - Start the app:
+     ```bash
+     npm start
+     ```
+   - Open Telegram and message your bot (try `/help`)
 
 ### 5. Start Using
 
-Send commands to the WhatsApp bot:
+Send commands to the Telegram bot:
 
-- `/generate <topic>` - Generate a LinkedIn post
-  - Example: `/generate AI in business`
-  
-- `/list` - List all pending posts
+ - `/generate <topic>` - Generate a LinkedIn post
+   - Example: `/generate AI in business`
 
-- `/approve <post_id>` - Approve and post to LinkedIn
-  - Example: `/approve 1`
+ - `/list` - List all pending posts
 
-- `/reject <post_id>` - Reject a pending post
+ - `/approve <post_id>` - Approve and post to LinkedIn
+   - Example: `/approve 1`
 
-- `/status` - Check bot status
+ - `/reject <post_id>` - Reject a pending post
 
-- `/help` - Show available commands
+ - `/status` - Check bot status
+
+ - `/help` - Show available commands
+
+Example session (sample)
+------------------------
+User -> Bot:
+```
+/generate AI in business
+```
+Bot -> User:
+```
+📝 Post Generated (ID: 1)
+
+[Generated post preview...]
+
+To approve: /approve 1
+To reject: /reject 1
+```
+User -> Bot:
+```
+/approve 1
+```
+Bot -> User:
+```
+✅ Post successfully published to LinkedIn!
+Post ID: 1
+LinkedIn Post ID: abc123
+```
 
 ## API Setup Guide
 
@@ -92,9 +120,9 @@ For detailed step-by-step instructions on obtaining all required API keys, see:
    - Request "Share on LinkedIn" permission
    - Add to `.env`: `LINKEDIN_CLIENT_ID` and `LINKEDIN_CLIENT_SECRET`
 
-3. **WhatsApp**
-   - No API key needed!
-   - Just scan QR code when app starts
+3. **Telegram**
+   - Create a bot with BotFather and add `TELEGRAM_BOT_TOKEN` to `.env`
+   - No QR code required; the bot uses polling by default for development
 
 ## Project Structure
 
@@ -102,11 +130,11 @@ For detailed step-by-step instructions on obtaining all required API keys, see:
 Project/
 ├── src/
 │   ├── index.js              # Main application entry
-│   ├── whatsapp/
-│   │   └── bot.js            # WhatsApp bot handler
+│   ├── telegram/
+│   │   └── bot.js            # Telegram bot wrapper (Telegraf)
 │   ├── ai/
-│   │   ├── gemini.js         # Gemini Pro integration
-│   │   └── imageGenerator.js # Image generation (Nano Banana)
+│   │   ├── gemini.js         # Generative AI integration (model configurable)
+│   │   └── imageGenerator.js # Image generation helper
 │   ├── linkedin/
 │   │   └── client.js         # LinkedIn API client
 │   └── storage/
@@ -123,12 +151,12 @@ Project/
 
 ## Workflow
 
-1. **Generate Post**: User sends `/generate <topic>` via WhatsApp
-2. **AI Generation**: System generates post text and image using Gemini Pro
-3. **Preview**: Generated post and image sent to user on WhatsApp
-4. **Approval**: User reviews and approves/rejects via `/approve` or `/reject`
-5. **Posting**: If approved, content is posted to LinkedIn with image
-6. **Confirmation**: User receives confirmation via WhatsApp
+1. **Generate Post**: User sends `/generate <topic>` via Telegram to the bot
+2. **AI Generation**: System generates post text and an image prompt using the configured generative model
+3. **Preview**: Generated post and image (if available) are sent to the user's Telegram chat
+4. **Review/Edit**: User can edit the preview text locally and resend an `/approve <post_id>` command when satisfied
+5. **Approval**: User approves via `/approve <post_id>`; the system posts to LinkedIn
+6. **Confirmation**: User receives confirmation via Telegram
 
 ## Configuration
 
@@ -137,14 +165,18 @@ Project/
 Create a `.env` file with the following variables:
 
 ```env
-# Google Gemini API
-GEMINI_API_KEY=your_gemini_api_key
+# Generative AI (Google)
+GEMINI_API_KEY=your_generative_api_key
+# Optional: override default model (example: 'models/text-bison-001' or a supported Gemini model)
+GENERATIVE_MODEL=models/text-bison-001
 
 # LinkedIn API
 LINKEDIN_CLIENT_ID=your_client_id
 LINKEDIN_CLIENT_SECRET=your_client_secret
 LINKEDIN_REDIRECT_URI=http://localhost:3000/auth/linkedin/callback
-LINKEDIN_ACCESS_TOKEN=your_access_token
+
+# Telegram Bot
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
 
 # Database (auto-created)
 DB_PATH=./data/database.db
@@ -161,11 +193,10 @@ PORT=3000
 
 The first time you use LinkedIn posting, you need to complete OAuth authentication:
 
-1. The app will provide an authorization URL
+1. The app will provide an authorization URL via `/auth url`
 2. Visit the URL and authorize the application
 3. Copy the authorization code from the redirect URL
-4. Exchange it for an access token (or use LinkedIn's OAuth Playground)
-5. Add the access token to `.env`: `LINKEDIN_ACCESS_TOKEN=your_token`
+4. Use `/auth code <code>` in Telegram to complete the OAuth flow (tokens are stored in the local database)
 
 For detailed instructions, see [API_SETUP_GUIDE.md](API_SETUP_GUIDE.md).
 
@@ -188,11 +219,11 @@ For deploying to free hosting services (Fly.io, Railway, etc.), see:
 
 ## Troubleshooting
 
-### WhatsApp Connection Issues
+### Telegram Issues
 
-- **QR code not showing**: Ensure `qrcode-terminal` package is installed
-- **Connection lost**: Delete `.wwebjs_auth/` directory and restart
-- **Session expired**: Re-scan QR code
+- **Bot not responding**: Ensure `TELEGRAM_BOT_TOKEN` is set and `npm start` was run.
+- **Using polling but bot doesn't start**: Check console for Telegraf startup logs and that the network allows outbound connections.
+- **Webhook failures**: Ensure your webhook URL is HTTPS and reachable by Telegram; check Telegram `setWebhook` response for errors.
 
 ### Gemini API Issues
 
@@ -215,14 +246,12 @@ For deploying to free hosting services (Fly.io, Railway, etc.), see:
 
 - ⚠️ Never commit `.env` file to Git (already in `.gitignore`)
 - ⚠️ Keep API keys secure and private
-- ⚠️ Don't share WhatsApp session files (`.wwebjs_auth/`)
-- ⚠️ Rotate API keys if accidentally exposed
+ - ⚠️ Rotate API keys if accidentally exposed
 
 ## Limitations
 
-- Image generation via Gemini API may not be available yet (structure ready for future updates)
+- Image generation via certain generative APIs may not be available in every region or account; use alternatives if needed
 - LinkedIn OAuth requires one-time setup
-- WhatsApp session requires re-authentication if expired
 - Free tier API limits may apply
 
 ## Contributing
@@ -242,4 +271,4 @@ For setup help:
 
 ---
 
-**Note**: This project uses WhatsApp Web.js, which is an unofficial library. Use at your own risk and comply with WhatsApp's Terms of Service.
+**Note**: This project now uses Telegram (official Bot API) for interactive commands. Keep `TELEGRAM_BOT_TOKEN` secret and follow Telegram's Bot API terms.

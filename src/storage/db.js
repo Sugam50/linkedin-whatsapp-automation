@@ -54,6 +54,20 @@ class DatabaseManager {
       )
     `);
 
+    // OAuth tokens table for storing LinkedIn access and refresh tokens
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS oauth_tokens (
+        provider TEXT PRIMARY KEY,
+        access_token TEXT NOT NULL,
+        refresh_token TEXT,
+        expires_at DATETIME,
+        token_type TEXT DEFAULT 'Bearer',
+        scope TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
     console.log('Database tables initialized successfully');
   }
 
@@ -122,6 +136,61 @@ class DatabaseManager {
     const stmt = this.db.prepare('SELECT value FROM config WHERE key = ?');
     const result = stmt.get(key);
     return result ? result.value : null;
+  }
+
+  // OAuth token operations
+  saveOAuthToken(provider, tokenData) {
+    const stmt = this.db.prepare(`
+      INSERT OR REPLACE INTO oauth_tokens
+      (provider, access_token, refresh_token, expires_at, token_type, scope, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `);
+
+    const expiresAt = tokenData.expires_in
+      ? new Date(Date.now() + tokenData.expires_in * 1000).toISOString()
+      : null;
+
+    return stmt.run(
+      provider,
+      tokenData.access_token,
+      tokenData.refresh_token,
+      expiresAt,
+      tokenData.token_type || 'Bearer',
+      tokenData.scope
+    );
+  }
+
+  getOAuthToken(provider) {
+    const stmt = this.db.prepare('SELECT * FROM oauth_tokens WHERE provider = ?');
+    return stmt.get(provider);
+  }
+
+  updateAccessToken(provider, accessToken, expiresIn) {
+    const stmt = this.db.prepare(`
+      UPDATE oauth_tokens
+      SET access_token = ?, expires_at = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE provider = ?
+    `);
+
+    const expiresAt = expiresIn
+      ? new Date(Date.now() + expiresIn * 1000).toISOString()
+      : null;
+
+    return stmt.run(accessToken, expiresAt, provider);
+  }
+
+  isTokenExpired(provider) {
+    const token = this.getOAuthToken(provider);
+    if (!token || !token.expires_at) return true;
+
+    // Add 5-minute buffer before expiry
+    const expiryTime = new Date(token.expires_at).getTime() - (5 * 60 * 1000);
+    return Date.now() >= expiryTime;
+  }
+
+  deleteOAuthToken(provider) {
+    const stmt = this.db.prepare('DELETE FROM oauth_tokens WHERE provider = ?');
+    return stmt.run(provider);
   }
 
   // Cleanup operations

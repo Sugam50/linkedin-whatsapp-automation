@@ -6,7 +6,9 @@ class GeminiService {
       throw new Error('GEMINI_API_KEY is required');
     }
     this.genAI = new GoogleGenerativeAI(apiKey);
-    this.model = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
+    // Allow overriding the model via env var; default to a supported text model
+    const modelName = process.env.GENERATIVE_MODEL || 'gemini-2.5-flash';
+    this.model = this.genAI.getGenerativeModel({ model: modelName });
   }
 
   /**
@@ -15,16 +17,43 @@ class GeminiService {
    * @returns {Promise<{content: string, imagePrompt: string}>}
    */
   async generateLinkedInPost(topic) {
-    const prompt = `Create a professional LinkedIn post about: "${topic}"
+    const prompt = `Write a SHORT LinkedIn post about: "${topic}"
 
-Requirements:
-1. Write an engaging, professional LinkedIn post (200-300 words)
-2. Use a conversational yet professional tone
-3. Include a hook in the first line to grab attention
-4. Add value with insights, tips, or personal reflection
-5. End with a question or call-to-action
-6. Use appropriate LinkedIn formatting (line breaks, bullet points if needed)
-7. Do NOT include hashtags (we'll add them separately)
+You are an engineer speaking from lived production experience.
+This post will be auto-published. It must sound human, not explanatory.
+
+ABSOLUTE RULES (do not violate):
+- 60–110 words total
+- First line must be a blunt statement (no setup, no context)
+- Write in short paragraphs (1–2 lines max)
+- Describe ONE concrete failure or anomaly
+- Include at least ONE specific technical detail (number, value, limit, timeout)
+- Do NOT explain systems, monitoring theory, or best practices
+- Do NOT narrate investigation steps
+- Do NOT use phrases like:
+  "we learned", "this shows", "important lesson", "in order to", "focused on",
+  "high-level", "metrics vs logs", "root cause", "postmortem"
+- If a sentence uses abstract words like "failing", "issue", "problem",
+  rewrite it using a concrete symptom instead.
+
+
+STYLE ENFORCEMENT:
+- Declarative sentences only
+- Minimal adjectives
+- No corporate language
+- No teaching tone
+- No emojis
+- Assume the reader is technical
+
+FORMATTING RULES:
+- Insert a blank line after every 1–2 sentences
+- Prefer single-sentence paragraphs
+- Use white space intentionally to create pauses
+- If a sentence explains something, rewrite it to show absence instead
+
+ENDING:
+- End with ONE sharp line or question (max 1 sentence)
+- Max 2 hashtags, placed at the very end
 
 After the post, provide a brief image description (1-2 sentences) that would be relevant for this post. Format your response as:
 POST:

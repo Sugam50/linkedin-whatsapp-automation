@@ -3,7 +3,7 @@ import DatabaseManager from './storage/db.js';
 import GeminiService from './ai/gemini.js';
 import ImageGenerator from './ai/imageGenerator.js';
 import LinkedInClient from './linkedin/client.js';
-import WhatsAppBot from './whatsapp/bot.js';
+import TelegramBot from './telegram/bot.js';
 import fs from 'fs-extra';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -20,7 +20,6 @@ const config = {
   linkedinClientId: process.env.LINKEDIN_CLIENT_ID,
   linkedinClientSecret: process.env.LINKEDIN_CLIENT_SECRET,
   linkedinRedirectUri: process.env.LINKEDIN_REDIRECT_URI || 'http://localhost:3000/auth/linkedin/callback',
-  linkedinAccessToken: process.env.LINKEDIN_ACCESS_TOKEN,
   dbPath: process.env.DB_PATH || './data/database.db',
   imagesDir: process.env.IMAGES_DIR || './images'
 };
@@ -41,8 +40,8 @@ let db;
 let geminiService;
 let imageGenerator;
 let linkedinClient;
-let whatsappBot;
-let userPhoneNumber = null;
+let telegramBot;
+let userChatId = null;
 
 // Initialize database
 try {
@@ -55,6 +54,7 @@ try {
 
 // Initialize Gemini service
 try {
+  console.log("Gemini API key", config.geminiApiKey)
   geminiService = new GeminiService(config.geminiApiKey);
   console.log('✅ Gemini service initialized');
 } catch (error) {
@@ -77,14 +77,18 @@ if (config.linkedinClientId && config.linkedinClientSecret) {
     linkedinClient = new LinkedInClient(
       config.linkedinClientId,
       config.linkedinClientSecret,
-      config.linkedinRedirectUri
+      config.linkedinRedirectUri,
+      db
     );
-    
-    if (config.linkedinAccessToken) {
-      linkedinClient.setAccessToken(config.linkedinAccessToken);
-      console.log('✅ LinkedIn client initialized with access token');
+
+    // Check if tokens exist in database
+    const tokenData = db.getOAuthToken('linkedin');
+    if (tokenData && !linkedinClient.isAccessTokenExpired()) {
+      console.log('✅ LinkedIn client initialized with valid stored tokens');
+    } else if (tokenData) {
+      console.log('⚠️ LinkedIn client initialized with expired tokens - will refresh automatically when needed');
     } else {
-      console.log('⚠️ LinkedIn client initialized but no access token found');
+      console.log('⚠️ LinkedIn client initialized but no tokens found');
       console.log('   You will need to complete OAuth flow to post to LinkedIn');
       console.log('   See API_SETUP_GUIDE.md for instructions\n');
     }
@@ -96,15 +100,15 @@ if (config.linkedinClientId && config.linkedinClientSecret) {
   console.log('   See API_SETUP_GUIDE.md for setup instructions\n');
 }
 
-// Initialize WhatsApp bot
-whatsappBot = new WhatsAppBot(handleWhatsAppMessage);
+// Initialize Telegram bot
+telegramBot = new TelegramBot(handleTelegramMessage);
 
-// Handle WhatsApp messages
-async function handleWhatsAppMessage(messageBody, sender, message) {
+// Handle Telegram messages (commands forwarded from Telegram)
+async function handleTelegramMessage(messageBody, sender, message) {
   try {
-    // Store sender number for responses
-    if (!userPhoneNumber) {
-      userPhoneNumber = sender;
+    // Store sender id for responses
+    if (!userChatId) {
+      userChatId = sender;
     }
 
     const parts = messageBody.split(' ');
@@ -132,29 +136,38 @@ async function handleWhatsAppMessage(messageBody, sender, message) {
         await handleStatusCommand(sender);
         break;
       
+      case '/auth':
+        await handleAuthCommand(sender, args);
+        break;
+
       case '/help':
         await handleHelpCommand(sender);
         break;
-      
+
       default:
-        await whatsappBot.sendMessage(
+        await telegramBot.sendMessage(
           sender,
           '❓ Unknown command. Send /help to see available commands.'
         );
     }
   } catch (error) {
-    console.error('Error handling WhatsApp message:', error);
-    await whatsappBot.sendMessage(
-      sender,
-      '❌ An error occurred while processing your request. Please try again.'
-    );
+    console.error('Error handling Telegram message:', error.message);
+    // Try to send error message, but don't fail if it also errors
+    try {
+      await telegramBot.sendMessage(
+        sender,
+        '❌ An error occurred while processing your request. Please try again.'
+      );
+    } catch (sendError) {
+      console.error('Failed to send error message:', sendError.message);
+    }
   }
 }
 
 // Handle /generate command
 async function handleGenerateCommand(sender, topic) {
   if (!topic || topic.trim() === '') {
-    await whatsappBot.sendMessage(
+    await telegramBot.sendMessage(
       sender,
       '❌ Please provide a topic. Usage: /generate <topic>\nExample: /generate AI in business'
     );
@@ -162,7 +175,7 @@ async function handleGenerateCommand(sender, topic) {
   }
 
   try {
-    await whatsappBot.sendMessage(sender, '🔄 Generating LinkedIn post... Please wait...');
+    await telegramBot.sendMessage(sender, '🔄 Generating LinkedIn post... Please wait...');
 
     // Generate post content using Gemini
     const { content, imagePrompt } = await geminiService.generateLinkedInPost(topic.trim());
@@ -191,13 +204,13 @@ async function handleGenerateCommand(sender, topic) {
     previewMessage += `To reject: /reject ${postId}`;
 
     if (imagePath && fs.existsSync(imagePath)) {
-      await whatsappBot.sendMessageWithImage(sender, previewMessage, imagePath);
+      await telegramBot.sendMessageWithImage(sender, previewMessage, imagePath);
     } else {
-      await whatsappBot.sendMessage(sender, previewMessage);
+      await telegramBot.sendMessage(sender, previewMessage);
     }
   } catch (error) {
     console.error('Error generating post:', error);
-    await whatsappBot.sendMessage(
+    await telegramBot.sendMessage(
       sender,
       `❌ Failed to generate post: ${error.message}`
     );
@@ -207,7 +220,7 @@ async function handleGenerateCommand(sender, topic) {
 // Handle /approve command
 async function handleApproveCommand(sender, postId) {
   if (!postId) {
-    await whatsappBot.sendMessage(
+    await telegramBot.sendMessage(
       sender,
       '❌ Please provide a post ID. Usage: /approve <post_id>'
     );
@@ -219,12 +232,12 @@ async function handleApproveCommand(sender, postId) {
     const post = db.getPost(postIdNum);
 
     if (!post) {
-      await whatsappBot.sendMessage(sender, `❌ Post with ID ${postId} not found.`);
+      await telegramBot.sendMessage(sender, `❌ Post with ID ${postId} not found.`);
       return;
     }
 
     if (post.status !== 'pending') {
-      await whatsappBot.sendMessage(
+      await telegramBot.sendMessage(
         sender,
         `⚠️ Post ${postId} is already ${post.status}. Use /list to see pending posts.`
       );
@@ -232,15 +245,15 @@ async function handleApproveCommand(sender, postId) {
     }
 
     // Check if LinkedIn client is available
-    if (!linkedinClient || !config.linkedinAccessToken) {
-      await whatsappBot.sendMessage(
+    if (!linkedinClient) {
+      await telegramBot.sendMessage(
         sender,
         '❌ LinkedIn is not configured. Please set up LinkedIn API credentials first.\nSee API_SETUP_GUIDE.md for instructions.'
       );
       return;
     }
 
-    await whatsappBot.sendMessage(sender, '🔄 Posting to LinkedIn... Please wait...');
+    await telegramBot.sendMessage(sender, '🔄 Posting to LinkedIn... Please wait...');
 
     // Post to LinkedIn
     try {
@@ -250,7 +263,7 @@ async function handleApproveCommand(sender, postId) {
       db.updatePostStatus(postIdNum, 'approved');
       db.addToPostedHistory(postIdNum, post.content, post.image_url, result.postId);
 
-      await whatsappBot.sendMessage(
+      await telegramBot.sendMessage(
         sender,
         `✅ Post successfully published to LinkedIn!\n\nPost ID: ${postId}\nLinkedIn Post ID: ${result.postId}`
       );
@@ -265,14 +278,14 @@ async function handleApproveCommand(sender, postId) {
       }
     } catch (linkedinError) {
       console.error('LinkedIn posting error:', linkedinError);
-      await whatsappBot.sendMessage(
+      await telegramBot.sendMessage(
         sender,
         `❌ Failed to post to LinkedIn: ${linkedinError.message}\n\nPost is still saved and can be retried.`
       );
     }
   } catch (error) {
     console.error('Error approving post:', error);
-    await whatsappBot.sendMessage(
+    await telegramBot.sendMessage(
       sender,
       `❌ Error processing approval: ${error.message}`
     );
@@ -282,7 +295,7 @@ async function handleApproveCommand(sender, postId) {
 // Handle /reject command
 async function handleRejectCommand(sender, postId) {
   if (!postId) {
-    await whatsappBot.sendMessage(
+    await telegramBot.sendMessage(
       sender,
       '❌ Please provide a post ID. Usage: /reject <post_id>'
     );
@@ -294,7 +307,7 @@ async function handleRejectCommand(sender, postId) {
     const post = db.getPost(postIdNum);
 
     if (!post) {
-      await whatsappBot.sendMessage(sender, `❌ Post with ID ${postId} not found.`);
+      await telegramBot.sendMessage(sender, `❌ Post with ID ${postId} not found.`);
       return;
     }
 
@@ -309,13 +322,13 @@ async function handleRejectCommand(sender, postId) {
       }
     }
 
-    await whatsappBot.sendMessage(
+    await telegramBot.sendMessage(
       sender,
       `✅ Post ${postId} has been rejected and removed.`
     );
   } catch (error) {
     console.error('Error rejecting post:', error);
-    await whatsappBot.sendMessage(
+    await telegramBot.sendMessage(
       sender,
       `❌ Error processing rejection: ${error.message}`
     );
@@ -327,8 +340,8 @@ async function handleListCommand(sender) {
   try {
     const pendingPosts = db.getPendingPosts();
 
-    if (pendingPosts.length === 0) {
-      await whatsappBot.sendMessage(sender, '📋 No pending posts.');
+  if (pendingPosts.length === 0) {
+      await telegramBot.sendMessage(sender, '📋 No pending posts.');
       return;
     }
 
@@ -342,10 +355,10 @@ async function handleListCommand(sender) {
       message += `/approve ${post.id} | /reject ${post.id}\n\n`;
     });
 
-    await whatsappBot.sendMessage(sender, message);
+    await telegramBot.sendMessage(sender, message);
   } catch (error) {
     console.error('Error listing posts:', error);
-    await whatsappBot.sendMessage(sender, '❌ Error fetching posts list.');
+    await telegramBot.sendMessage(sender, '❌ Error fetching posts list.');
   }
 }
 
@@ -353,19 +366,103 @@ async function handleListCommand(sender) {
 async function handleStatusCommand(sender) {
   try {
     const pendingCount = db.getPendingPosts().length;
-    const linkedinStatus = linkedinClient && config.linkedinAccessToken ? '✅ Connected' : '❌ Not configured';
-    const whatsappStatus = whatsappBot.isReady() ? '✅ Connected' : '⚠️ Connecting...';
+    let linkedinStatus = '❌ Not configured';
+
+    if (linkedinClient) {
+      const tokenData = db.getOAuthToken('linkedin');
+      if (tokenData && !linkedinClient.isAccessTokenExpired()) {
+        linkedinStatus = '✅ Connected';
+      } else if (tokenData) {
+        linkedinStatus = '⚠️ Tokens expired (will refresh automatically)';
+      } else {
+        linkedinStatus = '⚠️ OAuth required';
+      }
+    }
+
+  const telegramStatus = telegramBot.isReady() ? '✅ Connected' : '⚠️ Connecting...';
 
     let message = `📊 *Bot Status*\n\n`;
-    message += `WhatsApp: ${whatsappStatus}\n`;
+  message += `Telegram: ${telegramStatus}\n`;
     message += `LinkedIn: ${linkedinStatus}\n`;
     message += `Gemini: ✅ Connected\n`;
     message += `Pending Posts: ${pendingCount}\n`;
 
-    await whatsappBot.sendMessage(sender, message);
+  await telegramBot.sendMessage(sender, message);
   } catch (error) {
     console.error('Error getting status:', error);
-    await whatsappBot.sendMessage(sender, '❌ Error fetching status.');
+    await telegramBot.sendMessage(sender, '❌ Error fetching status.');
+  }
+}
+
+// Handle /auth command
+async function handleAuthCommand(sender, args) {
+  if (!linkedinClient) {
+    await telegramBot.sendMessage(
+      sender,
+      '❌ LinkedIn is not configured. Please set up LinkedIn API credentials first.\nSee API_SETUP_GUIDE.md for instructions.'
+    );
+    return;
+  }
+
+  const subCommand = args.split(' ')[0]?.toLowerCase();
+
+  switch (subCommand) {
+    case 'url':
+      // Generate authorization URL
+      try {
+        const authUrl = linkedinClient.getAuthorizationUrl();
+
+        await telegramBot.sendMessage(
+          sender,
+          `🔗 *LinkedIn Authorization URL*\n\n${authUrl}\n\nAfter authorization, you'll be redirected to your callback URL\\. Copy the authorization code from the URL and use:\n\n/auth code <authorization_code>`
+        , 'NONE');
+      } catch (error) {
+        await telegramBot.sendMessage(
+          sender,
+          `❌ Failed to generate authorization URL: ${error.message}`
+        );
+      }
+      break;
+
+    case 'code':
+      // Complete OAuth flow with authorization code
+      const code = args.replace(/^code\s+/, '').trim();
+      if (!code) {
+        await telegramBot.sendMessage(
+          sender,
+          '❌ Please provide the authorization code. Usage: /auth code <authorization_code>'
+        );
+        return;
+      }
+
+      try {
+        await telegramBot.sendMessage(sender, '🔄 Completing OAuth flow... Please wait...');
+
+        const tokenInfo = await linkedinClient.completeOAuthFlow(code);
+
+        await telegramBot.sendMessage(
+          sender,
+          `✅ LinkedIn OAuth completed successfully!\n\n` +
+          `Access Token: ✅ Stored\n` +
+          `Refresh Token: ✅ Stored\n` +
+          `Expires In: ${Math.floor(tokenInfo.expires_in / (24 * 60 * 60))} days\n\n` +
+          `Your tokens will be automatically refreshed when they expire.`
+        );
+      } catch (error) {
+        await telegramBot.sendMessage(
+          sender,
+          `❌ Failed to complete OAuth flow: ${error.message}`
+        );
+      }
+      break;
+
+    default:
+      await telegramBot.sendMessage(
+        sender,
+        `🔐 *LinkedIn OAuth Commands*\n\n` +
+        `*/auth url* - Get authorization URL\n` +
+        `*/auth code <code>* - Complete OAuth with authorization code`
+      );
   }
 }
 
@@ -380,17 +477,20 @@ async function handleHelpCommand(sender) {
     `   Example: /reject 1\n\n` +
     `*/list* - List all pending posts\n\n` +
     `*/status* - Check bot status\n\n` +
+    `*/auth* - LinkedIn OAuth management\n` +
+    `   /auth url - Get authorization URL\n` +
+    `   /auth code <code> - Complete OAuth flow\n\n` +
     `*/help* - Show this help message`;
 
-  await whatsappBot.sendMessage(sender, helpMessage);
+  await telegramBot.sendMessage(sender, helpMessage);
 }
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
   console.log('\n\n🛑 Shutting down gracefully...');
   
-  if (whatsappBot) {
-    await whatsappBot.destroy();
+  if (telegramBot) {
+    await telegramBot.destroy();
   }
   
   if (db) {
@@ -404,13 +504,13 @@ process.on('SIGINT', async () => {
 // Start the application
 async function start() {
   try {
-    console.log('🚀 Starting LinkedIn WhatsApp Automation...\n');
-    
-    // Initialize WhatsApp bot
-    await whatsappBot.initialize();
-    
+    console.log('🚀 Starting LinkedIn Telegram Automation...\n');
+
+    // Initialize Telegram bot
+    await telegramBot.initialize();
+
     console.log('\n✅ Application started successfully!');
-    console.log('📱 Waiting for WhatsApp connection...\n');
+    console.log('📱 Waiting for Telegram connection...\n');
   } catch (error) {
     console.error('❌ Failed to start application:', error);
     process.exit(1);
