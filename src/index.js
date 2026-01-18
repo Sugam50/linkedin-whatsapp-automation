@@ -85,7 +85,7 @@
       (async () => {
         try {
           const tokenData = await db.getOAuthToken('linkedin');
-          if (tokenData && !linkedinClient.isAccessTokenExpired()) {
+          if (tokenData && !await linkedinClient.isAccessTokenExpired()) {
             console.log('✅ LinkedIn client initialized with valid stored tokens');
           } else if (tokenData) {
             console.log('⚠️ LinkedIn client initialized with expired tokens - will refresh automatically when needed');
@@ -359,8 +359,7 @@
 
       if (linkedinClient) {
         const tokenData = await db.getOAuthToken('linkedin');
-        console.log('🔄 LinkedIn client:', linkedinClient.isAccessTokenExpired());
-        if (tokenData && !linkedinClient.isAccessTokenExpired()) {
+        if (tokenData && !await linkedinClient.isAccessTokenExpired()) {
           linkedinStatus = '✅ Connected';
         } else if (tokenData) {
           linkedinStatus = '⚠️ Tokens expired (will refresh automatically)';

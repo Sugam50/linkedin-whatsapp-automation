@@ -54,10 +54,7 @@ class LinkedInClient {
    * Check if access token is expired or about to expire
    * @returns {boolean} True if token needs refresh
    */
-  isAccessTokenExpired() {
-    console.log('🔄 Checking LinkedIn access token expiration...');
-    console.log('🔄 Access token:', this.accessToken);
-    console.log('🔄 Database:', this.db);
+  async isAccessTokenExpired() {
     if (!this.db) return !this.accessToken;
 
     return this.db.isTokenExpired(this.provider);
