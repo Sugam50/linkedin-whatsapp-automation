@@ -51,5 +51,6 @@ DEPLOYMENT_PLAN.md
 SETUP_NEXT_STEPS.md
 
 #images
+data/
 images/
 .vercel

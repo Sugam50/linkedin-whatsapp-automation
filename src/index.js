@@ -186,20 +186,19 @@
       // Generate post content using Gemini
       const { content, imagePrompt } = await geminiService.generateLinkedInPost(topic.trim());
 
-      // Generate image (if available)
-      let imagePath = null;
+      // Image generation disabled — keep imageUrl nullable
+      let imageUrl = null;
       try {
         if (imageGenerator) {
-          imagePath = await imageGenerator.generateImage(imagePrompt, `img_${Date.now()}.png`);
-          imagePath = imagePath.imagePath;
+          const result = await imageGenerator.generateImage(imagePrompt, `img_${Date.now()}.png`);
+          imageUrl = result?.imageUrl || null;
         }
       } catch (imageError) {
-        console.log('Image generation skipped:', imageError.message);
-        // Continue without image
+        console.log('Image generation/upload skipped:', imageError.message);
       }
 
-      // Save to database
-      const postId = await db.createPost(content, imagePath, null, topic.trim());
+      // Save to database (no local image paths)
+      const postId = await db.createPost(content, null, imageUrl, topic.trim());
 
       // Send preview to user
       let previewMessage = `📝 *Post Generated (ID: ${postId})*\n\n`;
@@ -209,8 +208,8 @@
       previewMessage += `To approve: /approve ${postId}\n`;
       previewMessage += `To reject: /reject ${postId}`;
 
-      if (imagePath && fs.existsSync(imagePath)) {
-        await telegramBot.sendMessageWithImage(sender, previewMessage, imagePath);
+      if (imageUrl) {
+        await telegramBot.sendMessageWithImage(sender, previewMessage, imageUrl);
       } else {
         await telegramBot.sendMessage(sender, previewMessage);
       }
@@ -263,7 +262,7 @@
 
       // Post to LinkedIn
       try {
-        const result = await linkedinClient.createPost(post.content, post.image_path);
+        const result = await linkedinClient.createPost(post.content, post.image_url || post.image_path);
         
         // Update database
         await db.updatePostStatus(postIdNum, 'approved');
@@ -274,14 +273,7 @@
           `✅ Post successfully published to LinkedIn!\n\nPost ID: ${postId}\nLinkedIn Post ID: ${result.postId}`
         );
 
-        // Clean up image file after successful posting (optional)
-        if (post.image_path && fs.existsSync(post.image_path)) {
-          try {
-            await fs.remove(post.image_path);
-          } catch (cleanupError) {
-            console.log('Image cleanup skipped:', cleanupError.message);
-          }
-        }
+        // No local image cleanup needed (images are stored in Supabase or none)
       } catch (linkedinError) {
         console.error('LinkedIn posting error:', linkedinError);
         await telegramBot.sendMessage(
@@ -318,15 +310,6 @@
       }
 
       await db.updatePostStatus(postIdNum, 'rejected');
-
-      // Clean up image file
-      if (post.image_path && fs.existsSync(post.image_path)) {
-        try {
-          await fs.remove(post.image_path);
-        } catch (cleanupError) {
-          console.log('Image cleanup skipped:', cleanupError.message);
-        }
-      }
 
       await telegramBot.sendMessage(
         sender,

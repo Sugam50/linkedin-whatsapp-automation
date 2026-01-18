@@ -44,10 +44,18 @@ class TelegramBot {
 
   async sendMessageWithImage(to, message, imagePath) {
     if (!this.bot) return this.sendMessage(to, message);
-    if (!imagePath || !fs.existsSync(imagePath)) return this.sendMessage(to, message);
+    if (!imagePath) return this.sendMessage(to, message);
 
     try {
-      await this.bot.telegram.sendPhoto(String(to), { source: fs.createReadStream(imagePath) }, { caption: message, parse_mode: 'Markdown' });
+      // If imagePath is a URL, send by URL; otherwise attempt to stream local file
+      if (String(imagePath).startsWith('http')) {
+        await this.bot.telegram.sendPhoto(String(to), imagePath, { caption: message, parse_mode: 'Markdown' });
+      } else if (fs.existsSync(imagePath)) {
+        await this.bot.telegram.sendPhoto(String(to), { source: fs.createReadStream(imagePath) }, { caption: message, parse_mode: 'Markdown' });
+      } else {
+        // Unknown imagePath format, fallback to text
+        await this.sendMessage(to, message);
+      }
     } catch (err) {
       console.error('Error sending Telegram image:', err.response?.error_description || err.message);
       // Fallback to text
