@@ -22,22 +22,10 @@ class TelegramBot {
       console.warn('⚠️ Telegram bot token not provided. Set TELEGRAM_BOT_TOKEN in your .env');
       return;
     }
+    // Do not start polling in production; webhook mode is used.
+    // We still keep a Telegraf instance for sending messages via bot.telegram
     this.ready = true;
-    console.log('✅ Telegram bot started (polling)');
-    // Handle text messages and commands; forward only messages starting with '/'
-    this.bot.on('text', async (ctx) => {
-      if(ctx.from.id !== Number(process.env.OWNER_ID)) return;
-      try {
-        const text = ctx.message.text?.trim() || '';
-        const chatId = String(ctx.chat.id);
-        if (text.startsWith('/') && this.onMessageCallback) {
-          await this.onMessageCallback(text, chatId, ctx.message);
-        }
-      } catch (err) {
-        console.error('Telegram message handler error:', err);
-      }
-    });
-    await this.bot.launch();
+    console.log('✅ Telegram bot ready (webhook mode expected)');
   }
 
   async sendMessage(to, message, parse_mode = 'Markdown') {

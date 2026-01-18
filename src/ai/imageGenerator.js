@@ -3,6 +3,7 @@ import axios from 'axios';
 import fs from 'fs-extra';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createClient } from '@supabase/supabase-js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -14,9 +15,20 @@ class ImageGenerator {
     }
     this.genAI = new GoogleGenerativeAI(apiKey);
     this.imagesDir = imagesDir;
-    
+
     // Ensure images directory exists
     fs.ensureDirSync(this.imagesDir);
+
+    // Supabase client (optional) - server-side service key required for uploads
+    this.supabaseUrl = process.env.SUPABASE_URL || null;
+    this.supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY || null;
+    if (this.supabaseUrl && this.supabaseServiceKey) {
+      this.supabase = createClient(this.supabaseUrl, this.supabaseServiceKey);
+      // default bucket name - ensure created in Supabase dashboard
+      this.supabaseBucket = process.env.SUPABASE_IMAGE_BUCKET || 'linkedin-images';
+    } else {
+      this.supabase = null;
+    }
   }
 
   /**
@@ -41,10 +53,20 @@ class ImageGenerator {
       
       // Save image to local storage
       const savedPath = await this.saveImage(imageData, filename || `img_${Date.now()}.png`);
-      
+
+      // If Supabase configured, upload and return public URL
+      let publicUrl = null;
+      if (this.supabase) {
+        try {
+          publicUrl = await this.uploadToSupabase(savedPath);
+        } catch (uploadErr) {
+          console.error('Supabase upload failed:', uploadErr);
+        }
+      }
+
       return {
         imagePath: savedPath,
-        imageUrl: null // Will be set when uploaded to cloud storage
+        imageUrl: publicUrl
       };
     } catch (error) {
       console.error('Error generating image with Gemini:', error);
@@ -113,6 +135,25 @@ class ImageGenerator {
     await fs.writeFile(filePath, imageData);
     console.log('Image saved to:', filePath);
     return filePath;
+  }
+
+  /**
+   * Upload a local image file to Supabase Storage and return a public URL
+   * @param {string} filePath
+   * @returns {Promise<string|null>}
+   */
+  async uploadToSupabase(filePath) {
+    if (!this.supabase) throw new Error('Supabase not configured');
+    const fileName = path.basename(filePath);
+    const fileContents = await fs.readFile(filePath);
+    const key = `images/${Date.now()}_${fileName}`;
+
+    const { data, error } = await this.supabase.storage.from(this.supabaseBucket).upload(key, fileContents, { upsert: true });
+    if (error) throw error;
+
+    // Get public URL
+    const { data: publicData } = this.supabase.storage.from(this.supabaseBucket).getPublicUrl(key);
+    return publicData?.publicUrl || null;
   }
 
   /**
