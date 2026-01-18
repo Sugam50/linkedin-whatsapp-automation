@@ -359,6 +359,8 @@
 
       if (linkedinClient) {
         const tokenData = await db.getOAuthToken('linkedin');
+        console.log('🔄 Token data:', tokenData);
+        console.log('🔄 LinkedIn client:', linkedinClient.isAccessTokenExpired());
         if (tokenData && !linkedinClient.isAccessTokenExpired()) {
           linkedinStatus = '✅ Connected';
         } else if (tokenData) {

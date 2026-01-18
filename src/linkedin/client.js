@@ -177,7 +177,6 @@ class LinkedInClient {
       );
 
       const tokenData = response.data;
-      console.log('🔄 Access token received:', tokenData);
       this.saveTokensToDatabase(tokenData);
 
       return this.accessToken;
