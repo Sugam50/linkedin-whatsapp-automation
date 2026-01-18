@@ -368,7 +368,7 @@
         }
       }
 
-    const telegramStatus = telegramBot.isReady() ? '✅ Connected' : '⚠️ Connecting...';
+    const telegramStatus = '✅ Connected';
 
       let message = `📊 *Bot Status*\n\n`;
     message += `Telegram: ${telegramStatus}\n`;
