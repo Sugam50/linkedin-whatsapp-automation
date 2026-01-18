@@ -163,6 +163,7 @@ class DatabaseManager {
 
   async isTokenExpired(provider) {
     const token = await this.getOAuthToken(provider);
+    console.log('🔄 Token:', token);
     if (!token || !token.expires_at) return true;
     const expiryTime = new Date(token.expires_at).getTime() - (5 * 60 * 1000);
     return Date.now() >= expiryTime;
