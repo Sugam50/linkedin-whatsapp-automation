@@ -103,7 +103,7 @@ class LinkedInClient {
    * @returns {Promise<string>} Valid access token
    */
   async ensureValidToken() {
-    if (this.isAccessTokenExpired()) {
+    if (await this.isAccessTokenExpired()) {
       await this.refreshAccessToken();
     }
     return this.accessToken;
