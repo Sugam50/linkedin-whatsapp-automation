@@ -134,7 +134,9 @@ class DatabaseManager {
   }
 
   async saveOAuthToken(provider, tokenData) {
-    const expiresAt = tokenData.expires_in ? new Date(Date.now() + tokenData.expires_in * 1000).toISOString() : null;
+    const expiresIn = new Date();
+    expiresIn.setMonth(expiresIn.getMonth() + 2);
+    const expiresAt = tokenData.expires_in ? new Date(Date.now() + tokenData.expires_in * 1000).toISOString() : new Date(expiresIn).toISOString();
     await this.ensureReady();
     return await this.pool.query(`
       INSERT INTO oauth_tokens (provider, access_token, refresh_token, expires_at, token_type, scope, updated_at)
