@@ -122,7 +122,7 @@ class LinkedInClient {
    * @param {string[]} scopes - OAuth scopes (default: w_member_social)
    * @returns {string} Authorization URL
    */
-  getAuthorizationUrl(scopes = ['openid', 'profile', 'w_member_social']) {
+  getAuthorizationUrl(scopes = ['openid', 'profile', 'w_member_social', 'offline_access']) {
     const state = Math.random().toString(36).substring(7);
   
     const url = new URL(`${this.authURL}/authorization`);
