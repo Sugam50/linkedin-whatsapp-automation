@@ -53,7 +53,7 @@ FORMATTING RULES:
 
 ENDING:
 - End with ONE sharp line or question (max 1 sentence)
-- Max 2 hashtags, placed at the very end
+- Max 5 hashtags, placed at the very end
 
 After the post, provide a brief image description (1-2 sentences) that would be relevant for this post. Format your response as:
 POST:
